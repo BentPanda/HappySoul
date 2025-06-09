@@ -5,7 +5,7 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Animator))]
 public class PlayerMovement : MonoBehaviour
 {
-    /* ─────────────────────  Inspector  ───────────────────── */
+    /* ───────── Inspector ───────── */
     [Header("Speeds")]
     public float moveSpeed = 5f;
     public float sprintMultiplier = 1.5f;
@@ -21,19 +21,18 @@ public class PlayerMovement : MonoBehaviour
 
     [Header("Stamina")]
     public float maxStamina = 100f;
-    public float sprintDrainRate = 15f;   // per second
-    public float dodgeCost = 20f;   // per roll
-    public float staminaRegenRate = 10f;   // per second
-    public float regenDelay = 1f;    // seconds after last use
-    public StaminaBar staminaBar;               // assign your StaminaBG here
+    public float sprintDrainRate = 15f;
+    public float dodgeCost = 20f;
+    public float staminaRegenRate = 10f;
+    public float regenDelay = 1f;
+    public StaminaBar staminaBar;
 
-    /* ─────────────────────  Runtime  ───────────────────── */
-    // exposed to Animator / other scripts
+    /* ───────── Runtime (exposed) ───────── */
     public Vector2 InputVector { get; private set; }
     public Vector3 Velocity { get; private set; }
     public bool IsLockedOn => cameraController != null && cameraController.IsLocked;
 
-    // internal
+    /* ───────── internal state ───────── */
     CharacterController controller;
     Animator animator;
 
@@ -44,8 +43,8 @@ public class PlayerMovement : MonoBehaviour
     float currentStamina;
     float regenTimer;
 
-    /* movement lock for combos, cut-scenes, etc. */
-    bool movementLocked = false;                             // ← NEW
+    /* movement lock set by Dodge / Combat / Health */
+    bool movementLocked = false;
 
     /* Input-System */
     InputSystem_Actions controls;
@@ -54,21 +53,19 @@ public class PlayerMovement : MonoBehaviour
     InputAction sprintAction;
     InputAction dodgeAction;
 
-    /* ─────────────────────  Mono  ───────────────────── */
+    /* ───────── Mono ───────── */
     void Awake()
     {
         controller = GetComponent<CharacterController>();
         animator = GetComponent<Animator>();
         animator.applyRootMotion = false;
 
-        /* input bindings */
         controls = new InputSystem_Actions();
         controls.Player.Enable();
         moveAction = controls.Player.Move;
         jumpAction = controls.Player.Jump;
         sprintAction = controls.Player.Sprint;
 
-        /* ad-hoc dodge action on Gamepad East/Circle */
         dodgeAction = new InputAction(
             name: "EastCircle",
             type: InputActionType.Button,
@@ -76,7 +73,6 @@ public class PlayerMovement : MonoBehaviour
         );
         dodgeAction.Enable();
 
-        /* stamina init */
         currentStamina = maxStamina;
         staminaBar.UpdateStamina(currentStamina, maxStamina);
     }
@@ -89,17 +85,20 @@ public class PlayerMovement : MonoBehaviour
 
     void Update()
     {
-        /* 1) Check current Animator state – used for dodge early-outs */
+        /* ─ 1) current animator state ─ */
         var state = animator.GetCurrentAnimatorStateInfo(0);
         bool inDodge = state.IsName("Dodge");
-        animator.applyRootMotion = inDodge;
+        bool inHurt = state.IsTag("Hurt");             // NEW
 
-        /* 2) Gravity is always evaluated */
+        /* Dodge OR Hurt clips supply root-motion */
+        animator.applyRootMotion = inDodge || inHurt;
+
+        /* ─ 2) gravity always ticks ─ */
         if (controller.isGrounded && verticalVelocity < 0f)
             verticalVelocity = -2f;
         verticalVelocity += gravity * Time.deltaTime;
 
-        /* 3) Tick stamina regeneration */
+        /* ─ 3) stamina regen ─ */
         regenTimer += Time.deltaTime;
         if (regenTimer >= regenDelay && currentStamina < maxStamina)
         {
@@ -107,19 +106,18 @@ public class PlayerMovement : MonoBehaviour
             staminaBar.UpdateStamina(currentStamina, maxStamina);
         }
 
-        /* 4) If the player is currently dodging, let OnAnimatorMove() push root-motion
-              and skip the rest of the Update loop */
-        if (inDodge)
+        /* ─ 4) let Dodge / Hurt root-motion drive us ─ */
+        if (inDodge || inHurt)
             return;
 
-        /* 5)  ← NEW  Early-out when a combo or cut-scene has locked locomotion */
+        /* ─ 5) freeze during lock (combo, hurt, cut-scene, etc.) ─ */
         if (movementLocked)
             return;
 
-        /* 6) Read movement input */
+        /* ─ 6) normal locomotion logic (unchanged) ─ */
         InputVector = moveAction.ReadValue<Vector2>();
 
-        /* 7) Dodge input */
+        /* Dodge */
         if (dodgeAction.triggered && controller.isGrounded && currentStamina >= dodgeCost)
         {
             currentStamina -= dodgeCost;
@@ -127,14 +125,12 @@ public class PlayerMovement : MonoBehaviour
             staminaBar.UpdateStamina(currentStamina, maxStamina);
 
             animator.SetTrigger("Dodge");
-            return;                                 // leave Update, root-motion takes over next frame
+            return;
         }
 
-        /* 8) Sprint toggle + drain */
-        if (sprintAction.triggered)
-            isSprinting = !isSprinting;
-        if (InputVector.magnitude < 0.1f)
-            isSprinting = false;
+        /* Sprint */
+        if (sprintAction.triggered) isSprinting = !isSprinting;
+        if (InputVector.magnitude < 0.1f) isSprinting = false;
 
         if (isSprinting && currentStamina > 0f)
         {
@@ -143,30 +139,26 @@ public class PlayerMovement : MonoBehaviour
             regenTimer = 0f;
             staminaBar.UpdateStamina(currentStamina, maxStamina);
 
-            if (currentStamina <= 0f)
-                isSprinting = false;
+            if (currentStamina <= 0f) isSprinting = false;
         }
 
-        /* 9) Jump */
+        /* Jump */
         if (controller.isGrounded && jumpAction.triggered)
         {
             animator.SetTrigger("JumpTrigger");
             verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
         }
 
-        /* 10) Normal move & rotate */
+        /* Move & rotate */
         Move(isSprinting);
         Rotate();
     }
 
-    /* ─────────────────────  Helpers  ───────────────────── */
-    public void LockMovement(bool locked)                   // ← NEW
+    /* ───────── Helpers ───────── */
+    public void LockMovement(bool locked)
     {
         movementLocked = locked;
-
-        /* stop residual slide when locking */
-        if (locked)
-            Velocity = Vector3.zero;
+        if (locked) Velocity = Vector3.zero;
     }
 
     void Move(bool sprinting)
@@ -177,8 +169,7 @@ public class PlayerMovement : MonoBehaviour
         if (h.sqrMagnitude > 1f) h.Normalize();
 
         float speed = moveSpeed * (sprinting ? sprintMultiplier : 1f);
-        Vector3 vel = h * speed;
-        vel.y = verticalVelocity;
+        Vector3 vel = h * speed; vel.y = verticalVelocity;
         Velocity = vel;
 
         controller.Move(vel * Time.deltaTime);
@@ -207,24 +198,45 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
-    /* feeds the Dodge animation’s root-motion while smoothing rotation */
+    /* ───────── Root-motion hooks ───────── */
     void OnAnimatorMove()
     {
         if (!animator.applyRootMotion)
             return;
 
-        /* 1) get input-based direction */
-        Vector3 f = cameraTransform.forward; f.y = 0; f.Normalize();
-        Vector3 r = cameraTransform.right; r.y = 0; r.Normalize();
-        Vector3 h = f * InputVector.y + r * InputVector.x;
-        if (h.sqrMagnitude > 1f) h.Normalize();
+        var info = animator.GetCurrentAnimatorStateInfo(0);
+        bool inDodge = info.IsName("Dodge");
+        bool inHurt = info.IsTag("Hurt");
 
-        /* 2) snap facing instantly toward dodge */
-        if (h.sqrMagnitude > 0.001f)
-            transform.rotation = Quaternion.LookRotation(h);
+        if (inDodge)
+        {
+            /* Dodge root-motion (unchanged) */
+            Vector3 f = cameraTransform.forward; f.y = 0; f.Normalize();
+            Vector3 r = cameraTransform.right; r.y = 0; r.Normalize();
+            Vector3 h = f * InputVector.y + r * InputVector.x;
+            if (h.sqrMagnitude > 1f) h.Normalize();
 
-        /* 3) apply horizontal root-motion + vertical gravity */
-        Vector3 motion = animator.deltaPosition + Vector3.up * (verticalVelocity * Time.deltaTime);
-        controller.Move(motion);
+            if (h.sqrMagnitude > 0.001f)
+                transform.rotation = Quaternion.LookRotation(h);
+
+            Vector3 motion = animator.deltaPosition
+                           + Vector3.up * (verticalVelocity * Time.deltaTime);
+            controller.Move(motion);
+        }
+        else if (inHurt)
+        {
+            /* Hurt / HeavyHurt root-motion */
+            Vector3 motion = animator.deltaPosition
+                           + Vector3.up * (verticalVelocity * Time.deltaTime);
+            controller.Move(motion);
+
+            transform.rotation *= animator.deltaRotation;
+        }
+        else
+        {
+            /* fallback */
+            controller.Move(animator.deltaPosition);
+            transform.rotation *= animator.deltaRotation;
+        }
     }
 }
