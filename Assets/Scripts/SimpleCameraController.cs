@@ -25,6 +25,12 @@ public class SimpleCameraController : MonoBehaviour
     public float minPitch = -30f;
     public float maxPitch = 60f;
 
+    [Header("Lock-On Camera")]
+    [Tooltip("Horizontal distance behind the player when locked on")]
+    public float lockDistance = 4f;
+    [Tooltip("Vertical height above the player when locked on")]
+    public float lockHeight = 2f;
+
     // Private state
     private InputSystem_Actions controls;
     private InputAction lookAction;
@@ -39,16 +45,13 @@ public class SimpleCameraController : MonoBehaviour
     private float yaw;
     private float pitch;
 
-
     void Awake()
     {
-        // 1) Instantiate & enable your generated InputSystem_Actions
         controls = new InputSystem_Actions();
         controls.Player.Enable();
 
-        // 2) Cache the actions
-        lookAction = controls.Player.Look;    // Vector2
-        lockOnAction = controls.Player.LockOn;  // Button (Stick press)
+        lookAction = controls.Player.Look;
+        lockOnAction = controls.Player.LockOn;
     }
 
     void OnDestroy()
@@ -60,46 +63,56 @@ public class SimpleCameraController : MonoBehaviour
     {
         if (target == null) return;
 
-        // --- 1) Toggle lock on button‐press ---
+        // 1) Toggle lock on button-press
         if (lockOnAction.triggered)
         {
             if (isLocked) ReleaseLock();
             else SelectLockTarget();
         }
 
-        // --- 2) Read orbit input & update yaw/pitch ---
+        // 2) Read orbit input & update yaw/pitch (only when not locked)
         Vector2 lookInput = lookAction.ReadValue<Vector2>();
-        if (lookInput.magnitude > 0.1f)
+        if (!isLocked && lookInput.magnitude > 0.1f)
         {
             yaw += lookInput.x * lookSpeed * Time.deltaTime;
             pitch -= lookInput.y * lookSpeed * Time.deltaTime;
             pitch = Mathf.Clamp(pitch, minPitch, maxPitch);
         }
 
-        // --- 3) Compute desired camera position ---
-        Quaternion orbitRot = Quaternion.Euler(pitch, yaw, 0f);
-        Vector3 desiredPos = target.position + orbitRot * offset;
-        transform.position = Vector3.Lerp(transform.position, desiredPos, followSpeed * Time.deltaTime);
-
-        // --- 4) Decide where to look ---
+        // 3) Compute desired camera position & look
         if (isLocked && lockTarget != null)
         {
-            // Aim at the target’s head (offset up by 1.5m)
+            // Direction from player to target (flat)
+            Vector3 toTarget = lockTarget.position - target.position;
+            toTarget.y = 0;
+            Vector3 forwardDir = toTarget.normalized;
+
+            // Desired position: behind the player relative to the target
+            Vector3 desiredPos = target.position
+                               - forwardDir * lockDistance
+                               + Vector3.up * lockHeight;
+
+            // Smooth follow
+            transform.position = Vector3.Lerp(transform.position, desiredPos, followSpeed * Time.deltaTime);
+
+            // Always look at the target's head
             Vector3 aimPoint = lockTarget.position + Vector3.up * 1.5f;
             transform.LookAt(aimPoint);
         }
         else
         {
+            // Free-orbit mode
+            Quaternion orbitRot = Quaternion.Euler(pitch, yaw, 0f);
+            Vector3 desiredPos = target.position + orbitRot * offset;
+            transform.position = Vector3.Lerp(transform.position, desiredPos, followSpeed * Time.deltaTime);
             transform.rotation = orbitRot;
         }
     }
 
     private void SelectLockTarget()
     {
-        // Find all colliders in radius on your targetLayer
         var hits = Physics.OverlapSphere(target.position, lockRadius, targetLayer);
 
-        // Player's forward direction (on XZ plane)
         Vector3 forward = target.forward;
         forward.y = 0;
         forward.Normalize();
@@ -109,7 +122,6 @@ public class SimpleCameraController : MonoBehaviour
 
         foreach (var c in hits)
         {
-            // Direction to candidate
             Vector3 dir = (c.transform.position - target.position).normalized;
             dir.y = 0;
 
@@ -128,7 +140,6 @@ public class SimpleCameraController : MonoBehaviour
         }
         else
         {
-            // no valid target found
             isLocked = false;
             lockTarget = null;
         }
@@ -136,11 +147,19 @@ public class SimpleCameraController : MonoBehaviour
 
     private void ReleaseLock()
     {
+        // 1) Read current camera rotation
+        Vector3 camEuler = transform.rotation.eulerAngles;
+
+        // 2) Sync yaw/pitch so free-orbit picks up where we're looking now
+        yaw = camEuler.y;
+        pitch = camEuler.x;
+        pitch = Mathf.Clamp(pitch, minPitch, maxPitch);
+
+        // 3) Turn off lock-on
         isLocked = false;
         lockTarget = null;
     }
 
-    // Optional: visualize your lock-on radius & angle in the editor
     void OnDrawGizmosSelected()
     {
         if (target == null) return;
