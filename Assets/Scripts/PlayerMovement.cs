@@ -1,11 +1,11 @@
-﻿// PlayerMovement.cs
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(CharacterController))]
 [RequireComponent(typeof(Animator))]
 public class PlayerMovement : MonoBehaviour
 {
+    /* ─────────────────────  Inspector  ───────────────────── */
     [Header("Speeds")]
     public float moveSpeed = 5f;
     public float sprintMultiplier = 1.5f;
@@ -25,9 +25,10 @@ public class PlayerMovement : MonoBehaviour
     public float dodgeCost = 20f;   // per roll
     public float staminaRegenRate = 10f;   // per second
     public float regenDelay = 1f;    // seconds after last use
-    public StaminaBar staminaBar;          // assign your StaminaBG here
+    public StaminaBar staminaBar;               // assign your StaminaBG here
 
-    // exposed to Animator
+    /* ─────────────────────  Runtime  ───────────────────── */
+    // exposed to Animator / other scripts
     public Vector2 InputVector { get; private set; }
     public Vector3 Velocity { get; private set; }
     public bool IsLockedOn => cameraController != null && cameraController.IsLocked;
@@ -35,32 +36,39 @@ public class PlayerMovement : MonoBehaviour
     // internal
     CharacterController controller;
     Animator animator;
+
     float verticalVelocity;
     bool isSprinting;
 
-    // stamina state
+    /* stamina state */
     float currentStamina;
     float regenTimer;
 
-    // InputSystem
+    /* movement lock for combos, cut-scenes, etc. */
+    bool movementLocked = false;                             // ← NEW
+
+    /* Input-System */
     InputSystem_Actions controls;
     InputAction moveAction;
     InputAction jumpAction;
     InputAction sprintAction;
     InputAction dodgeAction;
 
+    /* ─────────────────────  Mono  ───────────────────── */
     void Awake()
     {
         controller = GetComponent<CharacterController>();
         animator = GetComponent<Animator>();
         animator.applyRootMotion = false;
 
+        /* input bindings */
         controls = new InputSystem_Actions();
         controls.Player.Enable();
         moveAction = controls.Player.Move;
         jumpAction = controls.Player.Jump;
         sprintAction = controls.Player.Sprint;
 
+        /* ad-hoc dodge action on Gamepad East/Circle */
         dodgeAction = new InputAction(
             name: "EastCircle",
             type: InputActionType.Button,
@@ -68,7 +76,7 @@ public class PlayerMovement : MonoBehaviour
         );
         dodgeAction.Enable();
 
-        // init stamina
+        /* stamina init */
         currentStamina = maxStamina;
         staminaBar.UpdateStamina(currentStamina, maxStamina);
     }
@@ -81,17 +89,17 @@ public class PlayerMovement : MonoBehaviour
 
     void Update()
     {
-        // 1) Check dodge state
+        /* 1) Check current Animator state – used for dodge early-outs */
         var state = animator.GetCurrentAnimatorStateInfo(0);
         bool inDodge = state.IsName("Dodge");
         animator.applyRootMotion = inDodge;
 
-        // 2) Always tick gravity
+        /* 2) Gravity is always evaluated */
         if (controller.isGrounded && verticalVelocity < 0f)
             verticalVelocity = -2f;
         verticalVelocity += gravity * Time.deltaTime;
 
-        // 3) TICK STAMINA REGEN
+        /* 3) Tick stamina regeneration */
         regenTimer += Time.deltaTime;
         if (regenTimer >= regenDelay && currentStamina < maxStamina)
         {
@@ -99,26 +107,30 @@ public class PlayerMovement : MonoBehaviour
             staminaBar.UpdateStamina(currentStamina, maxStamina);
         }
 
-        // 4) If in dodge animation, let OnAnimatorMove handle motion & skip the rest
+        /* 4) If the player is currently dodging, let OnAnimatorMove() push root-motion
+              and skip the rest of the Update loop */
         if (inDodge)
             return;
 
-        // 5) Read movement input
+        /* 5)  ← NEW  Early-out when a combo or cut-scene has locked locomotion */
+        if (movementLocked)
+            return;
+
+        /* 6) Read movement input */
         InputVector = moveAction.ReadValue<Vector2>();
 
-        // 6) Dodge input
+        /* 7) Dodge input */
         if (dodgeAction.triggered && controller.isGrounded && currentStamina >= dodgeCost)
         {
-            // spend stamina
             currentStamina -= dodgeCost;
             regenTimer = 0f;
             staminaBar.UpdateStamina(currentStamina, maxStamina);
 
             animator.SetTrigger("Dodge");
-            return;
+            return;                                 // leave Update, root-motion takes over next frame
         }
 
-        // 7) Sprint toggle & drain
+        /* 8) Sprint toggle + drain */
         if (sprintAction.triggered)
             isSprinting = !isSprinting;
         if (InputVector.magnitude < 0.1f)
@@ -135,16 +147,26 @@ public class PlayerMovement : MonoBehaviour
                 isSprinting = false;
         }
 
-        // 8) Jump
+        /* 9) Jump */
         if (controller.isGrounded && jumpAction.triggered)
         {
             animator.SetTrigger("JumpTrigger");
             verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
         }
 
-        // 9) Normal move & rotate
+        /* 10) Normal move & rotate */
         Move(isSprinting);
         Rotate();
+    }
+
+    /* ─────────────────────  Helpers  ───────────────────── */
+    public void LockMovement(bool locked)                   // ← NEW
+    {
+        movementLocked = locked;
+
+        /* stop residual slide when locking */
+        if (locked)
+            Velocity = Vector3.zero;
     }
 
     void Move(bool sprinting)
@@ -170,10 +192,8 @@ public class PlayerMovement : MonoBehaviour
             dir.y = 0;
             if (dir.sqrMagnitude > 0.001f)
             {
-                var tgt = Quaternion.LookRotation(dir);
-                transform.rotation = Quaternion.RotateTowards(
-                    transform.rotation, tgt, rotationSpeed * Time.deltaTime
-                );
+                Quaternion tgt = Quaternion.LookRotation(dir);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, tgt, rotationSpeed * Time.deltaTime);
             }
         }
         else
@@ -181,34 +201,30 @@ public class PlayerMovement : MonoBehaviour
             Vector3 horiz = new Vector3(Velocity.x, 0, Velocity.z);
             if (horiz.sqrMagnitude > 0.001f)
             {
-                var tgt = Quaternion.LookRotation(horiz);
-                transform.rotation = Quaternion.RotateTowards(
-                    transform.rotation, tgt, rotationSpeed * Time.deltaTime
-                );
+                Quaternion tgt = Quaternion.LookRotation(horiz);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, tgt, rotationSpeed * Time.deltaTime);
             }
         }
     }
 
-    // feeds the Dodge animation’s root motion + gravity, while smoothing rotation
+    /* feeds the Dodge animation’s root-motion while smoothing rotation */
     void OnAnimatorMove()
     {
         if (!animator.applyRootMotion)
             return;
 
-        // 1) get input-based direction
+        /* 1) get input-based direction */
         Vector3 f = cameraTransform.forward; f.y = 0; f.Normalize();
         Vector3 r = cameraTransform.right; r.y = 0; r.Normalize();
         Vector3 h = f * InputVector.y + r * InputVector.x;
         if (h.sqrMagnitude > 1f) h.Normalize();
 
-        // 2) snap facing instantly toward dodge
+        /* 2) snap facing instantly toward dodge */
         if (h.sqrMagnitude > 0.001f)
             transform.rotation = Quaternion.LookRotation(h);
 
-        // 3) apply horizontal root motion + vertical gravity
-        Vector3 motion = animator.deltaPosition
-                       + Vector3.up * (verticalVelocity * Time.deltaTime);
-
+        /* 3) apply horizontal root-motion + vertical gravity */
+        Vector3 motion = animator.deltaPosition + Vector3.up * (verticalVelocity * Time.deltaTime);
         controller.Move(motion);
     }
 }
