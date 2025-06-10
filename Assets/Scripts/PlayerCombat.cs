@@ -21,6 +21,8 @@ public class PlayerCombat : MonoBehaviour
     int comboIndex = 0;                   // 0 = idle, 1-3 = swing #
     bool lockActive = false;               // true while movement frozen
     bool queuedPress = false;               // buffered R1
+    public int CurrentComboStage => comboIndex;   // 0 when not attacking
+
 
     /* ───── setup ───── */
     void Awake()
